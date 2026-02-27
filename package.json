@@ -43,7 +43,9 @@
     "desktop:package:macos:tech:sign": "node scripts/desktop-package.mjs --os macos --variant tech --sign",
     "desktop:package:windows:full:sign": "node scripts/desktop-package.mjs --os windows --variant full --sign",
     "desktop:package:windows:tech:sign": "node scripts/desktop-package.mjs --os windows --variant tech --sign",
-    "desktop:package": "node scripts/desktop-package.mjs"
+    "desktop:package": "node scripts/desktop-package.mjs",
+    "cron:worldmonitor-hourly": "node scripts/worldmonitor-hourly.mjs --loop --interval-minutes=60",
+    "cron:worldmonitor-hourly:once": "node scripts/worldmonitor-hourly.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",

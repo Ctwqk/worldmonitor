@@ -1041,6 +1041,34 @@ npm run dev    # Vite dev server on http://localhost:5173
 
 This runs the frontend without the API layer. Panels that require server-side proxying will show "No data available". The interactive map, static data layers (bases, cables, pipelines), and browser-side ML models still work.
 
+### Option 4: Self-Hosted Hourly Discord Relay (Bypass Vercel for push jobs)
+
+If your hourly automation posts news to Discord, run it outside Vercel so it no longer burns Edge/serverless invocations:
+
+```bash
+cp .env.example .env.local
+# set DISCORD_WEBHOOK_URL in your environment
+npm run cron:worldmonitor-hourly        # long-running loop, every 60 minutes
+```
+
+Single-shot mode (for crontab/systemd timers):
+
+```bash
+npm run cron:worldmonitor-hourly:once
+```
+
+What this does:
+
+- `scripts/worldmonitor-hourly.mjs` fetches RSS directly (no `/api/rss-proxy` calls), dedupes by persistent state, and posts only unseen headlines to Discord.
+- It writes latest payload to `data/hourly-news-cache.json` and (optionally) Upstash Redis key `worldmonitor:hourly-news:latest`.
+- New endpoint `/api/hourly-news` is cache-only and lightweight: it reads Redis and returns cached JSON, without fan-out fetches.
+
+Recommended cron entry:
+
+```bash
+0 * * * * cd /path/to/worldmonitor && npm run cron:worldmonitor-hourly:once >> /var/log/worldmonitor-hourly.log 2>&1
+```
+
 ### Platform Notes
 
 | Platform               | Status                  | Notes                                                                                                                          |

@@ -21,3 +21,5 @@ ideas/
 test-results/
 src-tauri/sidecar/node/*
 !src-tauri/sidecar/node/.gitkeep
+data/hourly-news-cache.json
+data/hourly-news-state.json
