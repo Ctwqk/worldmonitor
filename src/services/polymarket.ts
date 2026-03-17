@@ -1,7 +1,7 @@
 import type { PredictionMarket } from '@/types';
 import { createCircuitBreaker } from '@/utils';
 import { SITE_VARIANT } from '@/config';
-import { isDesktopRuntime } from '@/services/runtime';
+import { isDesktopRuntime, toRuntimeUrl } from '@/services/runtime';
 import { tryInvokeTauri } from '@/services/tauri-bridge';
 
 interface PolymarketMarket {
@@ -41,6 +41,12 @@ let directFetchWorks: boolean | null = null;
 let directFetchProbe: Promise<boolean> | null = null;
 let loggedDirectFetchBlocked = false;
 
+function isLocalBrowserRuntime(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  return host === 'localhost' || host === '127.0.0.1';
+}
+
 function logDirectFetchBlockedOnce(): void {
   if (loggedDirectFetchBlocked) return;
   loggedDirectFetchBlocked = true;
@@ -48,6 +54,11 @@ function logDirectFetchBlockedOnce(): void {
 }
 
 async function probeDirectFetchCapability(): Promise<boolean> {
+  if (isLocalBrowserRuntime()) {
+    directFetchWorks = false;
+    return false;
+  }
+
   if (directFetchWorks !== null) return directFetchWorks;
   if (!directFetchProbe) {
     directFetchProbe = fetch(`${GAMMA_API}/events?closed=false&order=volume&ascending=false&limit=1`, {
@@ -126,17 +137,18 @@ async function polyFetch(endpoint: 'events' | 'markets', params: Record<string, 
     } catch { /* Railway unavailable */ }
   }
 
-  // Try Vercel edge function
+  const proxyUrl = toRuntimeUrl(`/api/polymarket?${proxyQs}`);
+
+  // Try local/proxied API endpoint
   try {
-    const resp = await fetch(`/api/polymarket?${proxyQs}`);
+    const resp = await fetch(proxyUrl);
     if (resp.ok) {
       const data = await resp.clone().json();
       if (Array.isArray(data) && data.length > 0) return resp;
     }
   } catch { /* local proxy failed */ }
 
-  // Final fallback: hit production endpoint directly
-  return fetch(`https://worldmonitor.app/api/polymarket?${proxyQs}`);
+  return fetch(proxyUrl);
 }
 
 const GEOPOLITICAL_TAGS = [

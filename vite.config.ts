@@ -93,7 +93,13 @@ const VARIANT_META: Record<string, {
 };
 
 const activeVariant = process.env.VITE_VARIANT || 'full';
-const activeMeta = VARIANT_META[activeVariant] || VARIANT_META.full;
+const configuredPublicBaseUrl = process.env.VITE_PUBLIC_APP_BASE_URL?.trim();
+const activeMeta = {
+  ...(VARIANT_META[activeVariant] || VARIANT_META.full),
+  url: configuredPublicBaseUrl || (VARIANT_META[activeVariant] || VARIANT_META.full).url,
+};
+const publicBaseUrl = activeMeta.url.replace(/\/$/, '');
+const ogImageUrl = `${publicBaseUrl}/favico/og-image.png`;
 
 function htmlVariantPlugin(): Plugin {
   return {
@@ -109,16 +115,19 @@ function htmlVariantPlugin(): Plugin {
         .replace(/<meta property="og:url" content=".*?" \/>/, `<meta property="og:url" content="${activeMeta.url}" />`)
         .replace(/<meta property="og:title" content=".*?" \/>/, `<meta property="og:title" content="${activeMeta.title}" />`)
         .replace(/<meta property="og:description" content=".*?" \/>/, `<meta property="og:description" content="${activeMeta.description}" />`)
+        .replace(/<meta property="og:image" content=".*?" \/>/, `<meta property="og:image" content="${ogImageUrl}" />`)
         .replace(/<meta property="og:site_name" content=".*?" \/>/, `<meta property="og:site_name" content="${activeMeta.siteName}" />`)
         .replace(/<meta name="subject" content=".*?" \/>/, `<meta name="subject" content="${activeMeta.subject}" />`)
         .replace(/<meta name="classification" content=".*?" \/>/, `<meta name="classification" content="${activeMeta.classification}" />`)
         .replace(/<meta name="twitter:url" content=".*?" \/>/, `<meta name="twitter:url" content="${activeMeta.url}" />`)
         .replace(/<meta name="twitter:title" content=".*?" \/>/, `<meta name="twitter:title" content="${activeMeta.title}" />`)
         .replace(/<meta name="twitter:description" content=".*?" \/>/, `<meta name="twitter:description" content="${activeMeta.description}" />`)
+        .replace(/<meta name="twitter:image" content=".*?" \/>/, `<meta name="twitter:image" content="${ogImageUrl}" />`)
         .replace(/"name": "World Monitor"/, `"name": "${activeMeta.siteName}"`)
         .replace(/"alternateName": "WorldMonitor"/, `"alternateName": "${activeMeta.siteName.replace(' ', '')}"`)
         .replace(/"url": "https:\/\/worldmonitor\.app\/"/, `"url": "${activeMeta.url}"`)
         .replace(/"description": "Real-time global intelligence dashboard with live news, markets, military tracking, infrastructure monitoring, and geopolitical data."/, `"description": "${activeMeta.description}"`)
+        .replace(/"screenshot": "https:\/\/worldmonitor\.app\/favico\/og-image\.png"/, `"screenshot": "${ogImageUrl}"`)
         .replace(/"featureList": \[[\s\S]*?\]/, `"featureList": ${JSON.stringify(activeMeta.features, null, 8).replace(/\n/g, '\n      ')}`);
     },
   };

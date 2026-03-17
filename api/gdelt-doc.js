@@ -36,7 +36,15 @@ export default async function handler(req) {
     const response = await fetch(gdeltUrl.toString());
 
     if (!response.ok) {
-      throw new Error(`GDELT returned ${response.status}`);
+      return new Response(JSON.stringify({ articles: [], query, error: `GDELT returned ${response.status}` }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          ...cors,
+          'Cache-Control': 'public, max-age=120, s-maxage=120, stale-while-revalidate=60',
+          'X-GDELT-Status': String(response.status),
+        },
+      });
     }
 
     const data = await response.json();
@@ -60,9 +68,13 @@ export default async function handler(req) {
       },
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message, articles: [] }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify({ error: error.message, articles: [], query }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        ...cors,
+        'Cache-Control': 'public, max-age=120, s-maxage=120, stale-while-revalidate=60',
+      },
     });
   }
 }

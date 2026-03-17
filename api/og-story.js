@@ -24,12 +24,20 @@ const LEVEL_LABELS = {
   low: 'LOW RISK',
 };
 
-export default function handler(req, res) {
-  const url = new URL(req.url, `https://${req.headers.host}`);
+function resolveHostLabel(request) {
+  const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  if (forwardedHost) return forwardedHost;
+  const url = new URL(request.url);
+  return url.host;
+}
+
+export default function handler(request) {
+  const url = new URL(request.url);
   const countryCode = (url.searchParams.get('c') || '').toUpperCase();
   const type = url.searchParams.get('t') || 'ciianalysis';
   const score = url.searchParams.get('s');
   const level = url.searchParams.get('l') || 'normal';
+  const hostLabel = resolveHostLabel(request) || 'worldmonitor.app';
 
   const countryName = COUNTRY_NAMES[countryCode] || countryCode || 'Global';
   const levelColor = LEVEL_COLORS[level] || '#eab308';
@@ -211,12 +219,16 @@ export default function handler(req, res) {
 
   <!-- URL + date -->
   <text x="60" y="610" font-family="system-ui, sans-serif" font-size="14" fill="#555"
-    >worldmonitor.app · ${dateStr} · Free &amp; open source</text>
+    >${escapeXml(hostLabel)} · ${dateStr} · Free &amp; open source</text>
 </svg>`;
 
-  res.setHeader('Content-Type', 'image/svg+xml');
-  res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600, stale-while-revalidate=600');
-  res.status(200).send(svg);
+  return new Response(svg, {
+    status: 200,
+    headers: {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'public, max-age=3600, s-maxage=3600, stale-while-revalidate=600',
+    },
+  });
 }
 
 function escapeXml(str) {

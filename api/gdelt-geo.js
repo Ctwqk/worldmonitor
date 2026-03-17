@@ -26,6 +26,14 @@ function sanitizeQuery(val) {
   return val.slice(0, 200).replace(/[<>\"']/g, '');
 }
 
+function buildEmptyGeoJson(error = '') {
+  return {
+    type: 'FeatureCollection',
+    features: [],
+    error,
+  };
+}
+
 export default async function handler(req) {
   const cors = getCorsHeaders(req);
   if (isDisallowedOrigin(req)) {
@@ -55,11 +63,13 @@ export default async function handler(req) {
     );
 
     if (!response.ok) {
-      return new Response(JSON.stringify({ error: 'Upstream service unavailable' }), {
-        status: 502,
+      return new Response(JSON.stringify(buildEmptyGeoJson(`Upstream service unavailable (${response.status})`)), {
+        status: 200,
         headers: {
           'Content-Type': 'application/json',
           ...cors,
+          'Cache-Control': 'public, max-age=120, s-maxage=120, stale-while-revalidate=60',
+          'X-GDELT-Status': String(response.status),
         },
       });
     }
@@ -75,11 +85,12 @@ export default async function handler(req) {
     });
   } catch (error) {
     console.error('[GDELT] Fetch error:', error.message);
-    return new Response(JSON.stringify({ error: 'Failed to fetch GDELT data' }), {
-      status: 500,
+    return new Response(JSON.stringify(buildEmptyGeoJson('Failed to fetch GDELT data')), {
+      status: 200,
       headers: {
         'Content-Type': 'application/json',
         ...cors,
+        'Cache-Control': 'public, max-age=120, s-maxage=120, stale-while-revalidate=60',
       },
     });
   }

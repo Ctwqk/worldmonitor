@@ -78,7 +78,7 @@ export default async function handler(request) {
     return new Response(JSON.stringify({ error: 'Origin not allowed' }), { status: 403, headers: cors });
   }
   if (!FIRMS_API_KEY) {
-    return json({ regions: {}, totalCount: 0, skipped: true, reason: 'NASA_FIRMS_API_KEY not configured', source: SOURCE, days: 0, timestamp: new Date().toISOString() });
+    return json({ regions: {}, totalCount: 0, skipped: true, reason: 'NASA_FIRMS_API_KEY not configured', source: SOURCE, days: 0, timestamp: new Date().toISOString() }, 200);
   }
 
   try {

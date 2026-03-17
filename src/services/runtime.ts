@@ -2,13 +2,36 @@ const DEFAULT_REMOTE_HOSTS: Record<string, string> = {
   tech: 'https://tech.worldmonitor.app',
   full: 'https://worldmonitor.app',
   world: 'https://worldmonitor.app',
+  finance: 'https://finance.worldmonitor.app',
 };
 
 const DEFAULT_LOCAL_API_BASE = 'http://127.0.0.1:46123';
 const FORCE_DESKTOP_RUNTIME = import.meta.env.VITE_DESKTOP_RUNTIME === '1';
+const ACTIVE_VARIANT = import.meta.env.VITE_VARIANT || 'full';
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, '');
+}
+
+function getWindowOrigin(): string {
+  if (typeof window === 'undefined') return '';
+  const protocol = window.location?.protocol ?? '';
+  if (protocol !== 'http:' && protocol !== 'https:') return '';
+  return normalizeBaseUrl(window.location.origin);
+}
+
+function getVariantBaseOverride(variant: string): string {
+  switch (variant) {
+    case 'full':
+    case 'world':
+      return import.meta.env.VITE_PUBLIC_VARIANT_FULL_URL || import.meta.env.VITE_PUBLIC_APP_BASE_URL || '';
+    case 'tech':
+      return import.meta.env.VITE_PUBLIC_VARIANT_TECH_URL || '';
+    case 'finance':
+      return import.meta.env.VITE_PUBLIC_VARIANT_FINANCE_URL || '';
+    default:
+      return '';
+  }
 }
 
 type RuntimeProbe = {
@@ -81,7 +104,20 @@ export function getRemoteApiBaseUrl(): string {
     return normalizeBaseUrl(configuredRemoteBase);
   }
 
-  const variant = import.meta.env.VITE_VARIANT || 'full';
+  return DEFAULT_REMOTE_HOSTS[ACTIVE_VARIANT] ?? DEFAULT_REMOTE_HOSTS.full ?? 'https://worldmonitor.app';
+}
+
+export function getPublicAppBaseUrl(variant: string = ACTIVE_VARIANT): string {
+  const configuredBase = getVariantBaseOverride(variant);
+  if (configuredBase) {
+    return normalizeBaseUrl(configuredBase);
+  }
+
+  const windowOrigin = getWindowOrigin();
+  if (windowOrigin && variant === ACTIVE_VARIANT) {
+    return windowOrigin;
+  }
+
   return DEFAULT_REMOTE_HOSTS[variant] ?? DEFAULT_REMOTE_HOSTS.full ?? 'https://worldmonitor.app';
 }
 
@@ -102,6 +138,7 @@ const APP_HOSTS = new Set([
   'worldmonitor.app',
   'www.worldmonitor.app',
   'tech.worldmonitor.app',
+  'finance.worldmonitor.app',
   'localhost',
   '127.0.0.1',
 ]);

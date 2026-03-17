@@ -277,7 +277,7 @@ export async function fetchCategoryFeeds(
   } = {}
 ): Promise<NewsItem[]> {
   const topLimit = 20;
-  const batchSize = options.batchSize ?? 5;
+  const batchSize = options.batchSize ?? (SITE_VARIANT === 'full' ? 8 : 6);
   const currentLang = getCurrentLanguage();
 
   // Filter feeds by language:

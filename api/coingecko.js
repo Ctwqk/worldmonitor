@@ -103,6 +103,7 @@ export default async function handler(req) {
     const response = await fetch(geckoUrl, {
       headers: {
         'Accept': 'application/json',
+        'User-Agent': 'WorldMonitor/2.4 (https://worldmonitor.app)',
       },
     });
 

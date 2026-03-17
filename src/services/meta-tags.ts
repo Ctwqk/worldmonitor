@@ -1,5 +1,6 @@
 // Dynamic Meta Tags Service for World Monitor
 // Updates OG tags and Twitter Cards for shared stories
+import { getPublicAppBaseUrl } from './runtime';
 
 interface StoryMeta {
   countryCode: string;
@@ -10,17 +11,15 @@ interface StoryMeta {
   type: 'ciianalysis' | 'crisisalert' | 'dailybrief' | 'marketfocus';
 }
 
-const BASE_URL = 'https://worldmonitor.app';
-const DEFAULT_IMAGE = 'https://worldmonitor.app/favico/og-image.png';
-
 export function updateMetaTagsForStory(meta: StoryMeta): void {
   const { countryCode, countryName, ciiScore, ciiLevel, trend, type } = meta;
+  const baseUrl = getPublicAppBaseUrl();
   
   // Generate dynamic content
   const title = `${countryName} Intelligence Brief | World Monitor`;
   const description = generateDescription(ciiScore, ciiLevel, trend, type, countryName);
-  const storyUrl = `${BASE_URL}/api/story?c=${countryCode}&t=${type}`;
-  let imageUrl = `${BASE_URL}/api/og-story?c=${countryCode}&t=${type}`;
+  const storyUrl = `${baseUrl}/api/story?c=${countryCode}&t=${type}`;
+  let imageUrl = `${baseUrl}/api/og-story?c=${countryCode}&t=${type}`;
   if (ciiScore !== undefined) imageUrl += `&s=${ciiScore}`;
   if (ciiLevel) imageUrl += `&l=${ciiLevel}`;
   
@@ -53,15 +52,17 @@ export function resetMetaTags(): void {
   
   setMetaTag('title', defaultTitle);
   setMetaTag('description', defaultDesc);
-  setCanonicalLink(BASE_URL);
+  const baseUrl = getPublicAppBaseUrl();
+  const defaultImage = `${baseUrl}/favico/og-image.png`;
+  setCanonicalLink(baseUrl);
   setMetaTag('og:title', defaultTitle);
   setMetaTag('og:description', defaultDesc);
-  setMetaTag('og:url', BASE_URL);
-  setMetaTag('og:image', DEFAULT_IMAGE);
+  setMetaTag('og:url', baseUrl);
+  setMetaTag('og:image', defaultImage);
   setMetaTag('twitter:title', defaultTitle);
   setMetaTag('twitter:description', defaultDesc);
-  setMetaTag('twitter:url', BASE_URL);
-  setMetaTag('twitter:image', DEFAULT_IMAGE);
+  setMetaTag('twitter:url', baseUrl);
+  setMetaTag('twitter:image', defaultImage);
   
   sessionStorage.removeItem('storyMeta');
   console.log('[MetaTags] Reset to defaults');

@@ -2,7 +2,7 @@
 import { Panel } from './Panel';
 import { t } from '@/services/i18n';
 import { escapeHtml } from '@/utils/sanitize';
-import { isDesktopRuntime } from '@/services/runtime';
+import { getPublicAppBaseUrl, isDesktopRuntime } from '@/services/runtime';
 import {
   getDesktopReadinessChecks,
   getKeyBackedAvailabilitySummary,
@@ -161,7 +161,7 @@ export class ServiceStatusPanel extends Panel {
     }
 
     const port = this.localBackend.port ?? 46123;
-    const remote = this.localBackend.remoteBase ?? 'https://worldmonitor.app';
+    const remote = this.localBackend.remoteBase ?? getPublicAppBaseUrl();
 
     return `
       <div class="service-status-backend">

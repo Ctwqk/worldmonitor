@@ -1,0 +1,33 @@
+services:
+  worldmonitor-web:
+    image: constructure-worldmonitor:latest
+    build: .
+    container_name: worldmonitor-web
+    restart: unless-stopped
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    env_file:
+      - path: ./.env.local
+        required: false
+    environment:
+      VITE_ENABLE_VERCEL_ANALYTICS: "0"
+      LOCAL_API_CLOUD_FALLBACK: "false"
+      LOCAL_WEB_HOST: "0.0.0.0"
+      LOCAL_WEB_PORT: "3000"
+      PORT: "3000"
+      VITE_PUBLIC_APP_BASE_URL: "http://127.0.0.1:3000"
+      WM_CACHE_PATH: "/hourly-data/hourly-news-cache.json"
+      IBKR_QUOTES_URL: "http://host.docker.internal:7700/api/ibkr"
+      LOCAL_API_BIND: "0.0.0.0"
+      EXO_WATCHDOG_URL: "http://host.docker.internal:8000"
+    ports:
+      - 127.0.0.1:3000:3000
+      - 127.0.0.1:46123:46123
+    volumes:
+      - ../worldmonitor-hourly/data:/hourly-data:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/local-status').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s

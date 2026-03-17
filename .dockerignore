@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.git/
+.github/
+.vercel/
+.claude/
+.claudedocs/
+.playwright-mcp/
+test-results/
+.env.local
+.env
+news/
+api-cache.json
+

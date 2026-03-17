@@ -1,7 +1,7 @@
 /**
  * Summarization Service with Fallback Chain
  * Server-side Redis caching handles cross-user deduplication
- * Fallback: Groq -> OpenRouter -> Exo -> Browser T5
+ * Fallback: Groq -> OpenRouter -> Local LLM -> Browser T5
  */
 
 import { mlWorker } from './ml-worker';
@@ -89,19 +89,19 @@ async function tryExo(headlines: string[], geoContext?: string, lang?: string): 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       if (data.fallback) return null;
-      throw new Error(`Exo error: ${response.status}`);
+      throw new Error(`Local LLM error: ${response.status}`);
     }
 
     const data = await response.json();
     const provider = data.cached ? 'cache' : 'exo';
-    console.log(`[Summarization] ${provider === 'cache' ? 'Redis cache hit' : 'Exo success'}:`, data.model);
+    console.log(`[Summarization] ${provider === 'cache' ? 'Redis cache hit' : 'Local LLM success'}:`, data.model);
     return {
       summary: data.summary,
       provider: provider as SummarizationProvider,
       cached: !!data.cached,
     };
   } catch (error) {
-    console.warn('[Summarization] Exo failed:', error);
+    console.warn('[Summarization] Local LLM failed:', error);
     return null;
   }
 }
@@ -135,7 +135,7 @@ async function tryBrowserT5(headlines: string[], modelId?: string): Promise<Summ
 }
 
 /**
- * Generate a summary using the fallback chain: Groq -> OpenRouter -> Exo -> Browser T5
+ * Generate a summary using the fallback chain: Groq -> OpenRouter -> Local LLM -> Browser T5
  * Server-side Redis caching is handled by the API endpoints
  * @param geoContext Optional geographic signal context to include in the prompt
  */
@@ -174,7 +174,7 @@ export async function generateSummary(
       const openRouterResult = await tryOpenRouter(headlines, geoContext);
       if (openRouterResult) return openRouterResult;
 
-      onProgress?.(4, totalSteps, 'Trying Exo (local)...');
+      onProgress?.(4, totalSteps, 'Trying Local LLM...');
       const exoResult = await tryExo(headlines, geoContext);
       if (exoResult) return exoResult;
     } else {
@@ -197,7 +197,7 @@ export async function generateSummary(
       const openRouterResult = await tryOpenRouter(headlines, geoContext);
       if (openRouterResult) return openRouterResult;
 
-      onProgress?.(3, totalSteps, 'Trying Exo (local)...');
+      onProgress?.(3, totalSteps, 'Trying Local LLM...');
       const exoResult = await tryExo(headlines, geoContext);
       if (exoResult) return exoResult;
 
@@ -231,8 +231,8 @@ export async function generateSummary(
     return openRouterResult;
   }
 
-  // Step 3: Try Exo (self-hosted LAN LLM)
-  onProgress?.(3, totalSteps, 'Trying Exo (local)...');
+  // Step 3: Try the self-hosted local LLM via watchdog
+  onProgress?.(3, totalSteps, 'Trying Local LLM...');
   const exoResult = await tryExo(headlines, geoContext, lang);
   if (exoResult) {
     return exoResult;
@@ -308,9 +308,9 @@ export async function translateText(
     }
   }
 
-  // Step 3: Try Exo
+  // Step 3: Try the local LLM
   if (isFeatureAvailable('aiExo')) {
-    onProgress?.(3, 3, 'Translating with Exo (local)...');
+    onProgress?.(3, 3, 'Translating with Local LLM...');
     try {
       const response = await fetch('/api/exo-summarize', {
         method: 'POST',
@@ -327,7 +327,7 @@ export async function translateText(
         return data.summary;
       }
     } catch (e) {
-      console.warn('Exo translation failed', e);
+      console.warn('Local LLM translation failed', e);
     }
   }
 

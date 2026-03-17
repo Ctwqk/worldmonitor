@@ -1,6 +1,6 @@
 // UCDP (Uppsala Conflict Data Program) proxy
-// Returns conflict classification per country with intensity levels
-// No auth required - public API
+// Returns conflict classification per country with intensity levels.
+// Since February 2026, the upstream API requires x-ucdp-access-token.
 export const config = { runtime: 'edge' };
 
 import { getCachedJson, setCachedJson } from './_upstash-cache.js';
@@ -28,11 +28,40 @@ function toErrorMessage(error) {
   return String(error || 'unknown error');
 }
 
+function getUcdpToken() {
+  const value = process.env.UC_DP_KEY;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildUnavailablePayload(error, configured) {
+  return {
+    success: false,
+    configured,
+    count: 0,
+    conflicts: [],
+    error: toErrorMessage(error),
+  };
+}
+
 export default async function handler(req) {
   const cors = getCorsHeaders(req);
   if (isDisallowedOrigin(req)) {
     return new Response(JSON.stringify({ error: 'Origin not allowed' }), { status: 403, headers: cors });
   }
+
+  const token = getUcdpToken();
+  if (!token) {
+    recordCacheTelemetry('/api/ucdp', 'BYPASS');
+    return Response.json(buildUnavailablePayload('UCDP token not configured', false), {
+      status: 200,
+      headers: {
+        ...cors,
+        'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=60',
+        'X-Cache': 'BYPASS',
+      },
+    });
+  }
+
   const now = Date.now();
   const cached = await getCachedJson(CACHE_KEY);
   if (isValidResult(cached)) {
@@ -67,7 +96,10 @@ export default async function handler(req) {
 
     while (page < totalPages) {
       const response = await fetch(`https://ucdpapi.pcr.uu.se/api/ucdpprioconflict/24.1?pagesize=100&page=${page}`, {
-        headers: { 'Accept': 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          'x-ucdp-access-token': token,
+        },
       });
 
       if (!response.ok) {
@@ -141,10 +173,17 @@ export default async function handler(req) {
       });
     }
 
-    recordCacheTelemetry('/api/ucdp', 'ERROR');
-    return Response.json({ error: `Fetch failed: ${toErrorMessage(error)}`, conflicts: [] }, {
-      status: 500,
-      headers: { ...cors },
+    const errorMessage = toErrorMessage(error);
+    const configured = !/401|403|token/i.test(errorMessage);
+
+    recordCacheTelemetry('/api/ucdp', configured ? 'ERROR' : 'BYPASS');
+    return Response.json(buildUnavailablePayload(`Fetch failed: ${errorMessage}`, configured), {
+      status: 200,
+      headers: {
+        ...cors,
+        'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=60',
+        'X-Cache': configured ? 'ERROR' : 'BYPASS',
+      },
     });
   }
 }

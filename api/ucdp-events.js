@@ -31,6 +31,22 @@ function toErrorMessage(error) {
   return String(error || 'unknown error');
 }
 
+function getUcdpToken() {
+  const value = process.env.UC_DP_KEY;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildUnavailablePayload(error, configured) {
+  return {
+    success: false,
+    configured,
+    count: 0,
+    data: [],
+    cached_at: '',
+    error: toErrorMessage(error),
+  };
+}
+
 function isValidResult(data) {
   return Boolean(data && typeof data === 'object' && Array.isArray(data.data));
 }
@@ -68,13 +84,19 @@ function buildVersionCandidates() {
   ]));
 }
 
-async function fetchGedPage(version, page) {
+async function fetchGedPage(version, page, token) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     const response = await fetch(
       `https://ucdpapi.pcr.uu.se/api/gedevents/${version}?pagesize=${UCDP_PAGE_SIZE}&page=${page}`,
-      { headers: { Accept: 'application/json' }, signal: controller.signal }
+      {
+        headers: {
+          Accept: 'application/json',
+          'x-ucdp-access-token': token,
+        },
+        signal: controller.signal,
+      }
     );
     if (!response.ok) {
       throw new Error(`UCDP GED API error (${version}, page ${page}): ${response.status}`);
@@ -85,11 +107,11 @@ async function fetchGedPage(version, page) {
   }
 }
 
-async function discoverGedVersion() {
+async function discoverGedVersion(token) {
   const candidates = buildVersionCandidates();
   for (const version of candidates) {
     try {
-      const page0 = await fetchGedPage(version, 0);
+      const page0 = await fetchGedPage(version, 0, token);
       if (Array.isArray(page0?.Result)) {
         return { version, page0 };
       }
@@ -122,6 +144,19 @@ export default async function handler(req) {
     });
   }
 
+  const token = getUcdpToken();
+  if (!token) {
+    recordCacheTelemetry('/api/ucdp-events', 'BYPASS');
+    return Response.json(buildUnavailablePayload('UCDP token not configured', false), {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=60',
+        'X-Cache': 'BYPASS',
+      },
+    });
+  }
+
   const ip = getClientIp(req);
   if (!rateLimiter.check(ip)) {
     return Response.json({ error: 'Rate limited', data: [] }, {
@@ -149,7 +184,7 @@ export default async function handler(req) {
   }
 
   try {
-    const { version, page0 } = await discoverGedVersion();
+    const { version, page0 } = await discoverGedVersion(token);
     const totalPages = Math.max(1, Number(page0?.TotalPages) || 1);
     const newestPage = totalPages - 1;
 
@@ -158,7 +193,7 @@ export default async function handler(req) {
 
     for (let offset = 0; offset < MAX_PAGES && (newestPage - offset) >= 0; offset++) {
       const page = newestPage - offset;
-      const rawData = page === 0 ? page0 : await fetchGedPage(version, page);
+      const rawData = page === 0 ? page0 : await fetchGedPage(version, page, token);
       const events = Array.isArray(rawData?.Result) ? rawData.Result : [];
       allEvents = allEvents.concat(events);
 
@@ -229,9 +264,17 @@ export default async function handler(req) {
       });
     }
 
-    recordCacheTelemetry('/api/ucdp-events', 'ERROR');
-    return Response.json({ error: `Fetch failed: ${toErrorMessage(error)}`, data: [] }, {
-      status: 500, headers: corsHeaders,
+    const errorMessage = toErrorMessage(error);
+    const configured = !/401|403|token/i.test(errorMessage);
+
+    recordCacheTelemetry('/api/ucdp-events', configured ? 'ERROR' : 'BYPASS');
+    return Response.json(buildUnavailablePayload(`Fetch failed: ${errorMessage}`, configured), {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=60',
+        'X-Cache': configured ? 'ERROR' : 'BYPASS',
+      },
     });
   }
 }

@@ -171,6 +171,9 @@ async function buildRouteTable(root) {
     for (const entry of entries) {
       const absolute = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === 'data') {
+          continue;
+        }
         await walk(absolute);
         continue;
       }
@@ -913,7 +916,7 @@ export async function createLocalApiServer(options = {}) {
 
         server.once('listening', onListening);
         server.once('error', onError);
-        server.listen(context.port, '127.0.0.1');
+        server.listen(context.port, process.env.LOCAL_API_BIND || '127.0.0.1');
       });
 
       const address = server.address();

@@ -17,10 +17,12 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
 // Allowed RSS feed domains for security
 const ALLOWED_DOMAINS = [
   'feeds.bbci.co.uk',
+  'www.bbc.com',
   'www.theguardian.com',
   'feeds.npr.org',
   'news.google.com',
   'www.aljazeera.com',
+  'www.aljazeera.net',
   'rss.cnn.com',
   'hnrss.org',
   'feeds.arstechnica.com',
@@ -133,12 +135,41 @@ const ALLOWED_DOMAINS = [
   // International News Sources
   'www.france24.com',
   'www.euronews.com',
+  'fr.euronews.com',
+  'de.euronews.com',
+  'it.euronews.com',
+  'es.euronews.com',
+  'pt.euronews.com',
+  'ru.euronews.com',
   'www.lemonde.fr',
+  'feeds.elpais.com',
+  'e00-elmundo.uecdn.es',
+  'www.tagesschau.de',
+  'www.spiegel.de',
+  'newsfeed.zeit.de',
+  'www.ansa.it',
+  'xml2.corriereobjects.it',
+  'www.repubblica.it',
+  'feeds.nos.nl',
+  'www.nrc.nl',
+  'www.telegraaf.nl',
+  'www.svt.se',
+  'www.dn.se',
+  'www.svd.se',
   'rss.dw.com',
   'www.africanews.com',
+  'fr.africanews.com',
+  'www.jeuneafrique.com',
+  'www.lorientlejour.com',
+  'www.clarin.com',
+  'oglobo.globo.com',
+  'feeds.folha.uol.com.br',
+  'www.eltiempo.com',
+  'www.eluniversal.com.mx',
   'www.lasillavacia.com',
   'www.channelnewsasia.com',
   'www.thehindu.com',
+  'www.asahi.com',
   // International Organizations
   'news.un.org',
   'www.iaea.org',
@@ -179,6 +210,45 @@ const ALLOWED_DOMAINS = [
   'cointelegraph.com',
 ];
 
+const REQUEST_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+function assertAllowedDomain(url) {
+  const parsedUrl = new URL(url);
+  if (!ALLOWED_DOMAINS.includes(parsedUrl.hostname)) {
+    throw new Error(`Domain not allowed: ${parsedUrl.hostname}`);
+  }
+}
+
+async function fetchAllowedFeed(feedUrl, timeout, maxRedirects = 4) {
+  let currentUrl = feedUrl;
+
+  for (let attempt = 0; attempt <= maxRedirects; attempt += 1) {
+    assertAllowedDomain(currentUrl);
+
+    const response = await fetchWithTimeout(currentUrl, {
+      headers: REQUEST_HEADERS,
+      redirect: 'manual',
+    }, timeout);
+
+    if (!(response.status >= 300 && response.status < 400)) {
+      return response;
+    }
+
+    const location = response.headers.get('location');
+    if (!location) {
+      return response;
+    }
+
+    currentUrl = new URL(location, currentUrl).href;
+  }
+
+  throw new Error('Too many redirects');
+}
+
 export default async function handler(req) {
   const corsHeaders = getCorsHeaders(req, 'GET, OPTIONS');
 
@@ -198,64 +268,20 @@ export default async function handler(req) {
   }
 
   try {
-    const parsedUrl = new URL(feedUrl);
-
-    // Security: Check if domain is allowed
-    if (!ALLOWED_DOMAINS.includes(parsedUrl.hostname)) {
+    try {
+      assertAllowedDomain(feedUrl);
+    } catch {
       return new Response(JSON.stringify({ error: 'Domain not allowed' }), {
         status: 403,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
 
-    // Google News is slow - use longer timeout
+    // Fail faster on slow feeds; the client already falls back to cached feed data.
     const isGoogleNews = feedUrl.includes('news.google.com');
-    const timeout = isGoogleNews ? 20000 : 12000;
+    const timeout = isGoogleNews ? 12000 : 8000;
 
-    const response = await fetchWithTimeout(feedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      redirect: 'manual',
-    }, timeout);
-
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (location) {
-        try {
-          const redirectUrl = new URL(location, feedUrl);
-          if (!ALLOWED_DOMAINS.includes(redirectUrl.hostname)) {
-            return new Response(JSON.stringify({ error: 'Redirect to disallowed domain' }), {
-              status: 403,
-              headers: { 'Content-Type': 'application/json', ...corsHeaders },
-            });
-          }
-          const redirectResponse = await fetchWithTimeout(redirectUrl.href, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-              'Accept-Language': 'en-US,en;q=0.9',
-            },
-          }, timeout);
-          const data = await redirectResponse.text();
-          return new Response(data, {
-            status: redirectResponse.status,
-            headers: {
-              'Content-Type': 'application/xml',
-              'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=60',
-              ...corsHeaders,
-            },
-          });
-        } catch {
-          return new Response(JSON.stringify({ error: 'Invalid redirect' }), {
-            status: 502,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-      }
-    }
+    const response = await fetchAllowedFeed(feedUrl, timeout);
 
     const data = await response.text();
     return new Response(data, {
@@ -268,13 +294,14 @@ export default async function handler(req) {
     });
   } catch (error) {
     const isTimeout = error.name === 'AbortError';
+    const isDisallowed = String(error?.message || '').startsWith('Domain not allowed:');
     console.error('RSS proxy error:', feedUrl, error.message);
     return new Response(JSON.stringify({
-      error: isTimeout ? 'Feed timeout' : 'Failed to fetch feed',
+      error: isDisallowed ? 'Domain not allowed' : isTimeout ? 'Feed timeout' : 'Failed to fetch feed',
       details: error.message,
       url: feedUrl
     }), {
-      status: isTimeout ? 504 : 502,
+      status: isDisallowed ? 403 : isTimeout ? 504 : 502,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   }

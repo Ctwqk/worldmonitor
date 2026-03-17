@@ -79,8 +79,15 @@ import { clearChunkReloadGuard, installChunkReloadGuard } from '@/bootstrap/chun
 // Auto-reload on stale chunk 404s after deployment (Vite fires this for modulepreload failures).
 const chunkReloadStorageKey = installChunkReloadGuard(__APP_VERSION__);
 
-// Initialize Vercel Analytics
-inject();
+// Keep analytics enabled for normal web deployments, but avoid it in local runtime.
+if (
+  import.meta.env.VITE_ENABLE_VERCEL_ANALYTICS !== '0' &&
+  !location.hostname.startsWith('localhost') &&
+  !location.hostname.startsWith('127.0.0.1') &&
+  !('__TAURI_INTERNALS__' in window)
+) {
+  inject();
+}
 
 // Initialize dynamic meta tags for sharing
 initMetaTags();

@@ -45,6 +45,30 @@ interface RuntimeConfigPanelOptions {
   buffered?: boolean;
 }
 
+interface LocalLlmHostState {
+  ip?: string;
+  role?: string;
+  healthy?: boolean;
+  last_error?: string | null;
+  friendly_name?: string | null;
+  last_seen_age_seconds?: number | null;
+  ram_available_bytes?: number | null;
+}
+
+interface LocalLlmStatusPayload {
+  ok: boolean;
+  backend?: string;
+  desired_model?: string;
+  model?: string;
+  queue_depth?: number;
+  active_job?: string | null;
+  recovery_state?: string;
+  api_endpoint?: string;
+  instance_status?: string;
+  anomalies?: string[];
+  host_health?: Record<string, LocalLlmHostState>;
+}
+
 export class RuntimeConfigPanel extends Panel {
   private unsubscribe: (() => void) | null = null;
   private readonly mode: 'full' | 'alert';
@@ -52,12 +76,20 @@ export class RuntimeConfigPanel extends Panel {
   private pendingSecrets = new Map<RuntimeSecretKey, string>();
   private validatedKeys = new Map<RuntimeSecretKey, boolean>();
   private validationMessages = new Map<RuntimeSecretKey, string>();
+  private localLlmStatus: LocalLlmStatusPayload | null = null;
+  private localLlmStatusError: string | null = null;
+  private localLlmRefreshTimer: number | null = null;
+  private localLlmRefreshInFlight = false;
 
   constructor(options: RuntimeConfigPanelOptions = {}) {
     super({ id: 'runtime-config', title: t('modals.runtimeConfig.title'), showCount: false });
     this.mode = options.mode ?? (isDesktopRuntime() ? 'alert' : 'full');
     this.buffered = options.buffered ?? false;
     this.unsubscribe = subscribeRuntimeConfig(() => this.render());
+    void this.refreshLocalLlmStatus();
+    this.localLlmRefreshTimer = window.setInterval(() => {
+      void this.refreshLocalLlmStatus();
+    }, 30000);
     this.render();
   }
 
@@ -128,6 +160,32 @@ export class RuntimeConfigPanel extends Panel {
   public destroy(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    if (this.localLlmRefreshTimer !== null) {
+      window.clearInterval(this.localLlmRefreshTimer);
+      this.localLlmRefreshTimer = null;
+    }
+  }
+
+  private async refreshLocalLlmStatus(): Promise<void> {
+    if (this.localLlmRefreshInFlight) return;
+    this.localLlmRefreshInFlight = true;
+    try {
+      const response = await fetch('/api/local-llm-status', {
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload) {
+        const detail = payload?.error || payload?.detail || `HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      this.localLlmStatus = payload as LocalLlmStatusPayload;
+      this.localLlmStatusError = null;
+    } catch (error) {
+      this.localLlmStatusError = error instanceof Error ? error.message : 'Status unavailable';
+    } finally {
+      this.localLlmRefreshInFlight = false;
+      this.render();
+    }
   }
 
   private captureUnsavedInputs(): void {
@@ -207,6 +265,7 @@ export class RuntimeConfigPanel extends Panel {
     const secrets = effectiveSecrets.map((key) => this.renderSecretRow(key)).join('');
     const desktop = isDesktopRuntime();
     const fallbackHtml = available || allStaged ? '' : `<p class="runtime-feature-fallback fallback">${escapeHtml(feature.fallback)}</p>`;
+    const liveStatusHtml = feature.id === 'aiExo' ? this.renderLocalLlmStatus() : '';
 
     return `
       <section class="runtime-feature ${available ? 'available' : allStaged ? 'staged' : 'degraded'}">
@@ -218,8 +277,56 @@ export class RuntimeConfigPanel extends Panel {
           <span class="runtime-pill ${pillClass}">${pillLabel}</span>
         </header>
         <div class="runtime-secrets">${secrets}</div>
+        ${liveStatusHtml}
         ${fallbackHtml}
       </section>
+    `;
+  }
+
+  private renderLocalLlmStatus(): string {
+    if (!this.localLlmStatus) {
+      const message = this.localLlmStatusError
+        ? `Watchdog status unavailable: ${this.localLlmStatusError}`
+        : 'Watchdog status: loading...';
+      return `<div class="runtime-secret-meta">${escapeHtml(message)}</div>`;
+    }
+
+    const status = this.localLlmStatus;
+    const readiness = status.ok ? 'ready' : (status.recovery_state || status.instance_status || 'degraded');
+    const model = status.model || status.desired_model || 'unknown';
+    const apiEndpoint = status.api_endpoint || 'unknown';
+    const instanceStatus = status.instance_status || 'unknown';
+    const queueDepth = status.queue_depth ?? 0;
+    const activeJob = status.active_job ? `active ${status.active_job.slice(0, 8)}` : 'idle';
+    const hostLines = Object.values(status.host_health || {})
+      .sort((a, b) => (a.role || '').localeCompare(b.role || '') || (a.ip || '').localeCompare(b.ip || ''))
+      .map((host) => {
+        const hostState = host.healthy ? 'ready' : 'degraded';
+        const extras = [];
+        if (typeof host.last_seen_age_seconds === 'number') {
+          extras.push(`last seen ${Math.round(host.last_seen_age_seconds)}s`);
+        }
+        if (typeof host.ram_available_bytes === 'number') {
+          extras.push(`ram ${(host.ram_available_bytes / (1024 ** 3)).toFixed(1)}GB free`);
+        }
+        if (host.last_error) {
+          extras.push(host.last_error);
+        }
+        const label = host.friendly_name ? ` (${host.friendly_name})` : '';
+        return `<div class="runtime-secret-meta"><code>${escapeHtml(host.ip || 'unknown')}</code> ${escapeHtml((host.role || 'host') + label)} · ${escapeHtml(hostState)}${extras.length > 0 ? ` · ${escapeHtml(extras.join(' · '))}` : ''}</div>`;
+      })
+      .join('');
+    const anomalyHtml = (status.anomalies || []).length > 0
+      ? `<p class="runtime-feature-fallback fallback">${escapeHtml((status.anomalies || []).join(' | '))}</p>`
+      : '';
+
+    return `
+      <div class="runtime-secret-meta">Watchdog: ${escapeHtml(status.backend || 'unknown')} · ${escapeHtml(readiness)}</div>
+      <div class="runtime-secret-meta">Model: <code>${escapeHtml(model)}</code> · instance ${escapeHtml(instanceStatus)}</div>
+      <div class="runtime-secret-meta">Queue: ${escapeHtml(String(queueDepth))} · ${escapeHtml(activeJob)}</div>
+      <div class="runtime-secret-meta">Endpoint: <code>${escapeHtml(apiEndpoint)}</code></div>
+      ${hostLines}
+      ${anomalyHtml}
     `;
   }
 

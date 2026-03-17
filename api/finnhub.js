@@ -5,6 +5,8 @@ const SYMBOL_PATTERN = /^[A-Za-z0-9.^]+$/;
 const MAX_SYMBOLS = 20;
 const MAX_SYMBOL_LENGTH = 10;
 
+const IBKR_API = process.env.IBKR_QUOTES_URL || 'http://127.0.0.1:7700/api/ibkr';
+
 function validateSymbols(symbolsParam) {
   if (!symbolsParam) return null;
 
@@ -49,6 +51,54 @@ async function fetchQuote(symbol, apiKey) {
   };
 }
 
+/**
+ * Try IBKR for quotes — returns null if IBKR is unreachable
+ */
+async function fetchFromIBKR(symbols) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(`${IBKR_API}/quotes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(symbols),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (data.error) return null;
+
+    // IBKR returns array of { symbol, last, bid, ask, high, low, open, close, volume, ... }
+    // Map to finnhub-compatible format
+    const quotes = [];
+    for (const q of (Array.isArray(data) ? data : [])) {
+      if (!q.symbol || !q.last) continue;
+      const price = q.last;
+      const prevClose = q.close || q.last;
+      const change = price - prevClose;
+      const changePercent = prevClose ? (change / prevClose) * 100 : 0;
+      quotes.push({
+        symbol: q.symbol,
+        price,
+        change: Math.round(change * 100) / 100,
+        changePercent: Math.round(changePercent * 100) / 100,
+        high: q.high || price,
+        low: q.low || price,
+        open: q.open || price,
+        previousClose: prevClose,
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+    }
+    return quotes.length > 0 ? quotes : null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function handler(req) {
   const corsHeaders = getCorsHeaders(req, 'GET, OPTIONS');
 
@@ -73,15 +123,6 @@ export default async function handler(req) {
     });
   }
 
-  const apiKey = process.env.FINNHUB_API_KEY;
-
-  if (!apiKey) {
-    return new Response(JSON.stringify({ quotes: [], skipped: true, reason: 'FINNHUB_API_KEY not configured' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=60, stale-while-revalidate=30', ...corsHeaders },
-    });
-  }
-
   const url = new URL(req.url);
   const symbols = validateSymbols(url.searchParams.get('symbols'));
 
@@ -92,13 +133,36 @@ export default async function handler(req) {
     });
   }
 
+  // Try IBKR first (free, no API key needed, just needs TWS running)
+  const ibkrQuotes = await fetchFromIBKR(symbols);
+  if (ibkrQuotes) {
+    return new Response(JSON.stringify({ quotes: ibkrQuotes, provider: 'ibkr' }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=30, s-maxage=30, stale-while-revalidate=15',
+        ...corsHeaders,
+      },
+    });
+  }
+
+  // Fallback to Finnhub
+  const apiKey = process.env.FINNHUB_API_KEY;
+
+  if (!apiKey) {
+    return new Response(JSON.stringify({ quotes: [], skipped: true, reason: 'IBKR unavailable and FINNHUB_API_KEY not configured' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=60, stale-while-revalidate=30', ...corsHeaders },
+    });
+  }
+
   try {
     // Fetch all quotes in parallel (Finnhub allows 60 req/min on free tier)
     const quotes = await Promise.all(
       symbols.map(symbol => fetchQuote(symbol, apiKey))
     );
 
-    return new Response(JSON.stringify({ quotes }), {
+    return new Response(JSON.stringify({ quotes, provider: 'finnhub' }), {
       status: 200,
       headers: {
         'Content-Type': 'application/json',

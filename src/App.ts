@@ -97,7 +97,7 @@ import { AI_RESEARCH_LABS } from '@/config/ai-research-labs';
 import { STARTUP_ECOSYSTEMS } from '@/config/startup-ecosystems';
 import { TECH_HQS, ACCELERATORS } from '@/config/tech-geo';
 import { STOCK_EXCHANGES, FINANCIAL_CENTERS, CENTRAL_BANKS, COMMODITY_HUBS } from '@/config/finance-geo';
-import { isDesktopRuntime } from '@/services/runtime';
+import { getPublicAppBaseUrl, isDesktopRuntime, toRuntimeUrl } from '@/services/runtime';
 import { isFeatureAvailable } from '@/services/runtime-config';
 import { invokeTauri } from '@/services/tauri-bridge';
 import { getCountryAtCoordinates, hasCountryGeometry, isCoordinateInCountry, preloadCountryGeometry } from '@/services/country-geometry';
@@ -294,6 +294,16 @@ export class App {
       localStorage.setItem(LAYOUT_RESET_MIGRATION_KEY, 'done');
     }
 
+    // One-time migration: enable ais + flights layers for existing full-variant users
+    // who had them off by the old defaults (ais: false, flights: false).
+    const AIS_FLIGHTS_MIGRATION_KEY = 'worldmonitor-ais-flights-default-v2.5';
+    if (!localStorage.getItem(AIS_FLIGHTS_MIGRATION_KEY) && currentVariant === 'full' && !this.isMobile) {
+      if (!this.mapLayers.ais) this.mapLayers.ais = true;
+      if (!this.mapLayers.flights) this.mapLayers.flights = true;
+      saveToStorage(STORAGE_KEYS.mapLayers, this.mapLayers);
+      localStorage.setItem(AIS_FLIGHTS_MIGRATION_KEY, 'done');
+    }
+
     // Desktop key management panel must always remain accessible in Tauri.
     if (this.isDesktopApp) {
       const runtimePanel = this.panelSettings['runtime-config'] ?? {
@@ -331,10 +341,8 @@ export class App {
     // Initialize ML worker (desktop only - automatically disabled on mobile)
     await mlWorker.init();
 
-    // Check AIS configuration before init
-    if (!isAisConfigured()) {
-      this.mapLayers.ais = false;
-    } else if (this.mapLayers.ais) {
+    // Initialize AIS stream if configured and layer is enabled
+    if (isAisConfigured() && this.mapLayers.ais) {
       initAisStream();
     }
 
@@ -377,9 +385,6 @@ export class App {
     startLearning();
 
     // Hide unconfigured layers after first data load
-    if (!isAisConfigured()) {
-      this.map?.hideLayerToggle('ais');
-    }
     if (isOutagesConfigured() === false) {
       this.map?.hideLayerToggle('outages');
     }
@@ -476,7 +481,7 @@ export class App {
 
   private async checkForUpdate(): Promise<void> {
     try {
-      const res = await fetch('https://worldmonitor.app/api/version');
+      const res = await fetch(toRuntimeUrl('/api/version'));
       if (!res.ok) {
         this.logUpdaterOutcome('fetch_failed', { status: res.status });
         return;
@@ -550,7 +555,7 @@ export class App {
       const platform = this.mapDesktopDownloadPlatform(runtimeInfo.os, runtimeInfo.arch);
       if (platform) {
         const variant = this.getDesktopBuildVariant();
-        return `https://worldmonitor.app/api/download?platform=${platform}&variant=${variant}`;
+        return `${getPublicAppBaseUrl()}/api/download?platform=${platform}&variant=${variant}`;
       }
     } catch {
       // Silent fallback to release page when desktop runtime info is unavailable.
@@ -1778,11 +1783,15 @@ export class App {
   }
 
   private renderLayout(): void {
+    const fullVariantUrl = getPublicAppBaseUrl('full');
+    const techVariantUrl = getPublicAppBaseUrl('tech');
+    const financeVariantUrl = getPublicAppBaseUrl('finance');
+
     this.container.innerHTML = `
       <div class="header">
         <div class="header-left">
           <div class="variant-switcher">
-            <a href="${this.isDesktopApp ? '#' : (SITE_VARIANT === 'full' ? '#' : 'https://worldmonitor.app')}"
+            <a href="${this.isDesktopApp ? '#' : (SITE_VARIANT === 'full' ? '#' : fullVariantUrl)}"
                class="variant-option ${SITE_VARIANT === 'full' ? 'active' : ''}"
                data-variant="full"
                ${!this.isDesktopApp && SITE_VARIANT !== 'full' ? 'target="_blank" rel="noopener"' : ''}
@@ -1791,7 +1800,7 @@ export class App {
               <span class="variant-label">${t('header.world')}</span>
             </a>
             <span class="variant-divider"></span>
-            <a href="${this.isDesktopApp ? '#' : (SITE_VARIANT === 'tech' ? '#' : 'https://tech.worldmonitor.app')}"
+            <a href="${this.isDesktopApp ? '#' : (SITE_VARIANT === 'tech' ? '#' : techVariantUrl)}"
                class="variant-option ${SITE_VARIANT === 'tech' ? 'active' : ''}"
                data-variant="tech"
                ${!this.isDesktopApp && SITE_VARIANT !== 'tech' ? 'target="_blank" rel="noopener"' : ''}
@@ -1800,7 +1809,7 @@ export class App {
               <span class="variant-label">${t('header.tech')}</span>
             </a>
             <span class="variant-divider"></span>
-            <a href="${this.isDesktopApp ? '#' : (SITE_VARIANT === 'finance' ? '#' : 'https://finance.worldmonitor.app')}"
+            <a href="${this.isDesktopApp ? '#' : (SITE_VARIANT === 'finance' ? '#' : financeVariantUrl)}"
                class="variant-option ${SITE_VARIANT === 'finance' ? 'active' : ''}"
                data-variant="finance"
                ${!this.isDesktopApp && SITE_VARIANT !== 'finance' ? 'target="_blank" rel="noopener"' : ''}

@@ -1,4 +1,5 @@
 import type { StoryData } from './story-data';
+import { getPublicAppBaseUrl } from './runtime';
 
 // Deep link generator for story sharing
 export function generateStoryDeepLink(
@@ -7,6 +8,7 @@ export function generateStoryDeepLink(
   score?: number,
   level?: string
 ): string {
+  const baseUrl = getPublicAppBaseUrl();
   const params = new URLSearchParams({
     c: countryCode,
     t: type,
@@ -14,7 +16,7 @@ export function generateStoryDeepLink(
   });
   if (score !== undefined) params.set('s', String(score));
   if (level) params.set('l', level);
-  return `https://worldmonitor.app/api/story?${params.toString()}`;
+  return `${baseUrl}/api/story?${params.toString()}`;
 }
 
 // Parse deep link parameters

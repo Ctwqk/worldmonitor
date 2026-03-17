@@ -91,7 +91,7 @@ async function fetchAcledEvents(): Promise<SocialUnrestEvent[]> {
     // Check if ACLED is configured on server
     if (result.configured === false) {
       acledConfigured = false;
-      throw new Error('ACLED not configured');
+      return [];
     }
 
     acledConfigured = true;
