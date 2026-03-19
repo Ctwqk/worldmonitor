@@ -1,7 +1,7 @@
 /**
  * Summarization Service with Fallback Chain
  * Server-side Redis caching handles cross-user deduplication
- * Fallback: Groq -> OpenRouter -> Local LLM -> Browser T5
+ * Fallback: Watchdog-managed route -> Groq -> OpenRouter -> Browser T5
  */
 
 import { mlWorker } from './ml-worker';
@@ -9,7 +9,7 @@ import { SITE_VARIANT } from '@/config';
 import { BETA_MODE } from '@/config/beta';
 import { isFeatureAvailable } from './runtime-config';
 
-export type SummarizationProvider = 'groq' | 'openrouter' | 'exo' | 'browser' | 'cache';
+export type SummarizationProvider = 'groq' | 'openrouter' | 'exo' | 'watchdog' | 'gateway' | 'browser' | 'cache';
 
 export interface SummarizationResult {
   summary: string;
@@ -93,8 +93,8 @@ async function tryExo(headlines: string[], geoContext?: string, lang?: string): 
     }
 
     const data = await response.json();
-    const provider = data.cached ? 'cache' : 'exo';
-    console.log(`[Summarization] ${provider === 'cache' ? 'Redis cache hit' : 'Local LLM success'}:`, data.model);
+    const provider = data.cached ? 'cache' : (data.provider || 'watchdog');
+    console.log(`[Summarization] ${provider === 'cache' ? 'Redis cache hit' : 'Watchdog route success'}:`, data.model);
     return {
       summary: data.summary,
       provider: provider as SummarizationProvider,
@@ -217,25 +217,25 @@ export async function generateSummary(
 
   const totalSteps = 4;
 
-  // Step 1: Try Groq (fast, 14.4K/day with 8b-instant + Redis cache)
-  onProgress?.(1, totalSteps, 'Connecting to Groq AI...');
+  // Step 1: Try the managed watchdog route first.
+  onProgress?.(1, totalSteps, 'Checking watchdog LLM route...');
+  const exoResult = await tryExo(headlines, geoContext, lang);
+  if (exoResult) {
+    return exoResult;
+  }
+
+  // Step 2: Direct provider fallback if watchdog is unavailable.
+  onProgress?.(2, totalSteps, 'Connecting to Groq AI...');
   const groqResult = await tryGroq(headlines, geoContext, lang);
   if (groqResult) {
     return groqResult;
   }
 
-  // Step 2: Try OpenRouter (fallback, 50/day + Redis cache)
-  onProgress?.(2, totalSteps, 'Trying OpenRouter...');
+  // Step 3: Try OpenRouter.
+  onProgress?.(3, totalSteps, 'Trying OpenRouter...');
   const openRouterResult = await tryOpenRouter(headlines, geoContext, lang);
   if (openRouterResult) {
     return openRouterResult;
-  }
-
-  // Step 3: Try the self-hosted local LLM via watchdog
-  onProgress?.(3, totalSteps, 'Trying Local LLM...');
-  const exoResult = await tryExo(headlines, geoContext, lang);
-  if (exoResult) {
-    return exoResult;
   }
 
   // Step 4: Try Browser T5 (local, unlimited but slower)
@@ -262,9 +262,32 @@ export async function translateText(
 ): Promise<string | null> {
   if (!text) return null;
 
-  // Step 1: Try Groq
+  // Step 1: Try the managed watchdog route first.
+  if (isFeatureAvailable('aiExo')) {
+    onProgress?.(1, 3, 'Translating with watchdog route...');
+    try {
+      const response = await fetch('/api/exo-summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          headlines: [text],
+          mode: 'translate',
+          variant: targetLang
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.summary;
+      }
+    } catch (e) {
+      console.warn('Watchdog translation failed', e);
+    }
+  }
+
+  // Step 2: Try Groq.
   if (isFeatureAvailable('aiGroq')) {
-    onProgress?.(1, 3, 'Translating with Groq...');
+    onProgress?.(2, 3, 'Translating with Groq...');
     try {
       const response = await fetch('/api/groq-summarize', {
         method: 'POST',
@@ -285,9 +308,9 @@ export async function translateText(
     }
   }
 
-  // Step 2: Try OpenRouter
+  // Step 3: Try OpenRouter.
   if (isFeatureAvailable('aiOpenRouter')) {
-    onProgress?.(2, 3, 'Translating with OpenRouter...');
+    onProgress?.(3, 3, 'Translating with OpenRouter...');
     try {
       const response = await fetch('/api/openrouter-summarize', {
         method: 'POST',
@@ -305,29 +328,6 @@ export async function translateText(
       }
     } catch (e) {
       console.warn('OpenRouter translation failed', e);
-    }
-  }
-
-  // Step 3: Try the local LLM
-  if (isFeatureAvailable('aiExo')) {
-    onProgress?.(3, 3, 'Translating with Local LLM...');
-    try {
-      const response = await fetch('/api/exo-summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          headlines: [text],
-          mode: 'translate',
-          variant: targetLang
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return data.summary;
-      }
-    } catch (e) {
-      console.warn('Local LLM translation failed', e);
     }
   }
 

@@ -204,7 +204,9 @@ export default async function handler(request) {
     return new Response(JSON.stringify({
       summary,
       model,
-      provider: 'exo',
+      provider: job.result?.provider || 'watchdog',
+      backend: job.result?.backend || 'exo',
+      routeId: job.result?.route_id || '',
       cached: false,
       tokens: responsePayload?.usage?.total_tokens || 0,
     }), {
