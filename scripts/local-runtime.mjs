@@ -24,6 +24,11 @@ const shouldBuild = buildOnly || (!serveOnly && process.env.LOCAL_WEB_BUILD !== 
 const appBaseUrl = process.env.VITE_PUBLIC_APP_BASE_URL || `http://${host}:${webPort}`;
 const apiBaseUrl = process.env.VITE_TAURI_API_BASE_URL || `http://${sidecarHost}:${apiPort}`;
 const localVariant = process.env.VITE_VARIANT || 'full';
+const sidecarReadyTimeoutMs = Number(
+  process.env.LOCAL_API_READY_TIMEOUT_MS || (serveOnly ? 90000 : 45000)
+);
+const sidecarProbeTimeoutMs = Number(process.env.LOCAL_API_PROBE_TIMEOUT_MS || 3000);
+const sidecarRetryDelayMs = Number(process.env.LOCAL_API_RETRY_DELAY_MS || 500);
 
 const MIME_TYPES = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -104,36 +109,52 @@ async function ensureBuild() {
   }
 }
 
-async function waitForSidecar(timeoutMs = 20000) {
+async function probeSidecar() {
+  await new Promise((resolve, reject) => {
+    const req = http.request({
+      host: sidecarHost,
+      port: apiPort,
+      path: '/api/local-status',
+      method: 'GET',
+      timeout: sidecarProbeTimeoutMs,
+    }, (res) => {
+      res.resume();
+      if ((res.statusCode || 500) < 500) {
+        resolve();
+        return;
+      }
+      reject(new Error(`sidecar status ${res.statusCode}`));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.end();
+  });
+}
+
+async function waitForSidecar(timeoutMs = sidecarReadyTimeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  let attempts = 0;
+  let lastError = null;
   while (Date.now() < deadline) {
+    attempts += 1;
     try {
-      await new Promise((resolve, reject) => {
-        const req = http.request({
-          host: sidecarHost,
-          port: apiPort,
-          path: '/api/service-status',
-          method: 'GET',
-          timeout: 1500,
-        }, (res) => {
-          res.resume();
-          if ((res.statusCode || 500) < 500) {
-            resolve();
-            return;
-          }
-          reject(new Error(`sidecar status ${res.statusCode}`));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => req.destroy(new Error('timeout')));
-        req.end();
-      });
+      await probeSidecar();
+      if (attempts > 1) {
+        console.log(`[local-web] sidecar became ready after ${attempts} probe(s)`);
+      }
       return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    } catch (error) {
+      lastError = error;
+      if (attempts === 1 || attempts % 10 === 0) {
+        const reason = error instanceof Error ? error.message : 'unknown error';
+        console.warn(`[local-web] waiting for sidecar (${attempts} probes): ${reason}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, sidecarRetryDelayMs));
     }
   }
 
-  throw new Error(`Timed out waiting for local API sidecar on ${sidecarHost}:${apiPort}`);
+  const detail = lastError instanceof Error ? ` (${lastError.message})` : '';
+  throw new Error(`Timed out waiting for local API sidecar on ${sidecarHost}:${apiPort}${detail}`);
 }
 
 function startSidecar() {
@@ -199,7 +220,8 @@ async function main() {
     return;
   }
 
-  const sidecar = startSidecar();
+  let sidecar = null;
+  let ownsSidecar = false;
   let shuttingDown = false;
   let server = null;
 
@@ -207,21 +229,28 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     if (!server) {
-      if (!sidecar.killed) sidecar.kill('SIGTERM');
+      if (ownsSidecar && sidecar && !sidecar.killed) sidecar.kill('SIGTERM');
       process.exit(code);
       return;
     }
     server.close(() => {
-      if (!sidecar.killed) sidecar.kill('SIGTERM');
+      if (ownsSidecar && sidecar && !sidecar.killed) sidecar.kill('SIGTERM');
       process.exit(code);
     });
   };
 
-  sidecar.on('exit', (code) => {
-    if (shuttingDown) return;
-    console.error(`[local-web] sidecar exited with code ${code ?? 'unknown'}`);
-    shutdown(code || 1);
-  });
+  try {
+    await probeSidecar();
+    console.log(`[local-web] reusing existing sidecar on http://${sidecarHost}:${apiPort}`);
+  } catch {
+    sidecar = startSidecar();
+    ownsSidecar = true;
+    sidecar.on('exit', (code) => {
+      if (shuttingDown) return;
+      console.error(`[local-web] sidecar exited with code ${code ?? 'unknown'}`);
+      shutdown(code || 1);
+    });
+  }
 
   await waitForSidecar();
 
